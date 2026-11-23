@@ -26,11 +26,11 @@ function imageCards(target,items,emptyText){
 function render(data){
   const status=data.status||{},latest=status.latest||{};
   $('state').textContent=status.state||'prepared';$('step').textContent=(status.step||0).toLocaleString();
-  $('loss').textContent=fmt(latest.loss);$('flow').textContent=fmt(latest.flow);$('kl').textContent=fmt(latest.kl);$('beta').textContent=fmt(latest.beta);
+  $('loss').textContent=fmt(latest.loss);$('dataMse').textContent=fmt(latest.data_mse);$('kl').textContent=fmt(latest.kl);$('beta').textContent=fmt(latest.beta);
   const history=data.history?.loss||[];
   lineChart($('lossChart'),[
     {name:'Total',color:COLORS[0],points:history.map(p=>({x:p.step,y:Number(p.loss)}))},
-    {name:'Flow',color:COLORS[1],points:history.map(p=>({x:p.step,y:Number(p.flow)}))},
+    {name:'Data MSE',color:COLORS[1],points:history.map(p=>({x:p.step,y:Number(p.data_mse)}))},
   ]);
   lineChart($('klChart'),[
     {name:'e4',color:COLORS[0],points:history.map(p=>({x:p.step,y:Number(p.kl_e4)}))},

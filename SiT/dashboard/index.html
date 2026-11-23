@@ -24,12 +24,12 @@
     <div class="stat"><div class="label">State</div><div id="state" class="value">—</div></div>
     <div class="stat"><div class="label">Step</div><div id="step" class="value cyan">0</div></div>
     <div class="stat"><div class="label">Total loss</div><div id="loss" class="value">—</div></div>
-    <div class="stat"><div class="label">Flow MSE</div><div id="flow" class="value lime">—</div></div>
-    <div class="stat"><div class="label">KL</div><div id="kl" class="value amber">—</div></div>
+    <div class="stat"><div class="label">Data MSE</div><div id="dataMse" class="value lime">—</div></div>
+    <div class="stat"><div class="label">KL rate</div><div id="kl" class="value amber">—</div></div>
     <div class="stat"><div class="label">β</div><div id="beta" class="value">—</div></div>
   </section>
   <section class="grid2">
-    <article class="panel"><div class="panelHead"><h2>Total · Flow</h2><span>optimizer step</span></div><div id="lossChart" class="chart"></div></article>
+    <article class="panel"><div class="panelHead"><h2>Total loss · Data MSE</h2><span>optimizer step</span></div><div id="lossChart" class="chart"></div></article>
     <article class="panel"><div class="panelHead"><h2>KL by adapter</h2><span>e4 · e8 · e16</span></div><div id="klChart" class="chart"></div></article>
   </section>
   <section class="panel" style="margin-bottom:22px"><div class="panelHead"><h2>Live training batch</h2><span>actual ImageNet batch</span></div><div id="liveBatch" class="gallery"><div class="empty">학습 batch가 아직 없습니다.</div></div></section>

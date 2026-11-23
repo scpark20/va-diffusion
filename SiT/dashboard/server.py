@@ -62,7 +62,15 @@ def snapshot(run_dir):
         if LIVE_PATTERN.fullmatch(path.name)
     ]
     samples = []
-    for path in sorted((run_dir / "samples").glob("step_*.png")):
+    sample_dir = run_dir / "samples"
+    latest = max(sample_dir.glob("step_*_metadata.json"), default=None)
+    manifest = read_json(latest, {}) if latest else {}
+    for name in manifest.get("files", []):
+        if not SAMPLE_PATTERN.fullmatch(name):
+            continue
+        path = sample_dir / name
+        if not path.is_file():
+            continue
         match = SAMPLE_PATTERN.fullmatch(path.name)
         if not match:
             continue

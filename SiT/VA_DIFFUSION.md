@@ -29,7 +29,7 @@
 각 adapter에서:
 
 ```python
-p = Prior(h)
+mu_p, logstd_p = Prior(h_map)
 delta = PosteriorDelta(concat(h_map, encoder_condition))
 mu_q = mu_p + delta_mu
 logstd_q = clamp(logstd_p + delta_logstd, -5, 2)
@@ -53,9 +53,13 @@ shape:
 Free bits와 KL balancing은 사용하지 않는다.
 
 ```python
-kl = mean([kl_e4, kl_e8, kl_e16])
-beta = 0.03 * min(step / (0.30 * total_steps), 1.0)
-loss = flow_mse + beta * kl
+x_t = (1 - t) * noise + t * clean
+pred_clean = x_t + (1 - t) * pred_velocity
+data_mse = mean((pred_clean - clean)**2)
+# kl_sum[level]은 이미지별로 spatial 및 latent 차원을 합산한 KL(q || p)
+kl_rate = mean(kl_sum["e4"] + kl_sum["e8"] + kl_sum["e16"]) / (4 * 32 * 32)
+beta = max(1e-4, min(1.0, (step - 21) / 5021))
+loss = data_mse + beta * kl_rate
 ```
 
 ## 67번 서버 입력
@@ -64,8 +68,10 @@ loss = flow_mse + beta * kl
 - local VAE: `/data/RBF-Solver/weights/SiT-diffusers/SiT-S-2-256/vae`
 - 학습 GPU: 물리 `GPU 1`의 RTX 5090 한 장만 사용
 
-`train_va_diffusion.py`는 단일 GPU 학습만 수행하며 기본 장치는 `--gpu 1`이다.
-checkpoint에는 frozen SiT를 복사하지 않고 addon과 optimizer만 저장한다.
+`train_va_diffusion.py`의 기본 장치는 `--device 1`이다. 물리 GPU 1만 노출한 환경에서는 `--device 0`으로 실행한다.
+`step`은 해당 업데이트 직전까지 완료한 횟수다. 5,042에서 β가 1에 도달한다. [Efficient-VDVAE 설정](https://github.com/Rayhane-mamah/Efficient-VDVAE/blob/main/efficient_vdvae_torch/hparams.cfg) · [스케줄 구현](https://github.com/Rayhane-mamah/Efficient-VDVAE/blob/main/efficient_vdvae_torch/model/schedules.py)
+학습은 epoch 상한 없이 계속되며 SIGINT 또는 SIGTERM을 받으면 현재 step을 마친 뒤
+checkpoint와 샘플을 저장하고 정상 중지한다.
 
 대시보드 생성 샘플은 Euler, CFG 1.5, NFE `1·3·5·10`, prior temperature
 `0.0·0.3·0.6`, 조합당 4장을 사용한다. Temperature는
@@ -74,9 +80,5 @@ checkpoint에는 frozen SiT를 복사하지 않고 addon과 optimizer만 저장�
 Addon·optimizer·epoch/batch 위치·CPU/CUDA RNG는 30분마다 `latest.pt`에 저장하고,
 각 checkpoint 직후 같은 STEP의 48장 Euler 샘플을 생성한다.
 
-67번 서버 실측 검증:
-
-- ImageNet 294 shards와 local VAE를 이용한 실제 학습 step 통과
-- batch 192 peak GPU memory: 25,575.6 MiB
-- checkpoint: 1,194.9 MiB, 저장 0.53초
-- frozen base gradient 0, addon gradient 정상
+검증 진입점 `verify_va_diffusion.py`는 실제 ImageNet 배치로 초기 출력의 일치,
+학습 재개 후 다음 loss와 모든 addon 파라미터의 일치, 48개 PNG의 수와 해상도를 검사한다.

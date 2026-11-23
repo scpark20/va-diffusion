@@ -30,6 +30,8 @@ def load_model(base_path: Path, addon_path: Path, device: torch.device):
     base.load_state_dict(load_file(str(base_path), device="cpu"), strict=True)
     model = VADiffusionSiT(base)
     checkpoint = torch.load(addon_path, map_location="cpu", weights_only=True)
+    if checkpoint.get("format") != 2:
+        raise ValueError("expected a VA-Diffusion format 2 checkpoint")
     model.load_addon_state_dict(checkpoint["addon"])
     return model.eval().requires_grad_(False).to(device), checkpoint
 
@@ -153,7 +155,9 @@ def generate_sample_set(
         "files": files,
     }
     metadata_path = output_dir / f"step_{global_step:08d}_metadata.json"
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+    tmp.replace(metadata_path)
     model.train(was_training)
     return metadata_path, files
 
