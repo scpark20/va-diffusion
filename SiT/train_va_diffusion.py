@@ -68,7 +68,12 @@ def make_model(device):
 
 def update(model, optimizer, vae, images, labels, step):
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-        clean = (vae.encode(images.float().div(127.5).sub(1)).latent_dist.sample().float() * LATENT_SCALE)
+        # Keep the frozen image encoder's transient activations bounded.
+        posteriors = [vae.encode(chunk.float().div(127.5).sub(1)).latent_dist
+                      for chunk in images.split(8)]
+        mean = torch.cat([p.mean for p in posteriors])
+        std = torch.cat([p.std for p in posteriors])
+        clean = (mean + std * torch.randn_like(mean)).float() * LATENT_SCALE
     noise = torch.randn_like(clean)
     t = torch.rand(len(clean), device=clean.device)
     x_t = torch.lerp(noise, clean, t[:, None, None, None])
