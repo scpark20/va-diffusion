@@ -55,3 +55,7 @@ loss = flow_mse + beta * kl
 
 `train_va_diffusion.py`는 `torchrun` 단일·다중 GPU를 모두 지원하며, checkpoint에는
 frozen SiT를 복사하지 않고 addon과 optimizer만 저장한다.
+
+대시보드 생성 샘플은 Euler, CFG 1.5, NFE `1·3·5·10`, prior temperature
+`0.0·0.3·0.6`, 조합당 4장을 사용한다. Temperature는
+`z = mu_p + temperature * sigma_p * epsilon`에만 적용한다.

@@ -164,7 +164,7 @@ def parse_args():
     parser.add_argument("--addon-ckpt", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--labels", type=int, nargs=4, required=True)
-    parser.add_argument("--cfg-scale", type=float, required=True)
+    parser.add_argument("--cfg-scale", type=float, default=1.5)
     parser.add_argument("--nfes", type=int, nargs="+", default=[1, 3, 5, 10])
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.0, 0.3, 0.6])
     parser.add_argument("--seed", type=int, default=0)
