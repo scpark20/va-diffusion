@@ -40,6 +40,16 @@ html{color-scheme:dark}body:before{content:"";position:fixed;inset:0;pointer-eve
     #liveBatch {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:18px;gap:8px}
     @media(max-width:900px){.sampleGrid.conditions {grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:650px){.sampleGrid.conditions {grid-template-columns:1fr} #liveBatch{grid-template-columns:1fr 1fr}}
+    .batchAndKl {display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:0 0 24px}
+    .batchAndKl > .panel {min-width:0}
+    #liveBatch {grid-template-columns:repeat(4,minmax(0,1fr))}
+    .klLegend {display:flex;gap:20px;flex-wrap:wrap;padding:14px 20px 0;font:13px ui-monospace,monospace}
+    .klLegend span {display:inline-flex;align-items:center;gap:6px}
+    .klLegend i {display:inline-block;width:17px;height:3px}
+    #klPlot {padding:3px 12px 8px} #klPlot svg {width:100%;height:auto;display:block}
+    #klPlot text {fill:#a9bbd0;font:12px ui-monospace,monospace}
+    @media(max-width:900px){.batchAndKl {grid-template-columns:1fr}}
+    @media(max-width:650px){#liveBatch {grid-template-columns:repeat(2,minmax(0,1fr))}}
   </style>
 </head>
 <body>
@@ -53,9 +63,15 @@ html{color-scheme:dark}body:before{content:"";position:fixed;inset:0;pointer-eve
     <div class="stat"><div class="label">실제 상태</div><div id="state" class="value lime">—</div><div id="age" class="hint">API 연결 중</div></div>
     <div class="stat"><div id="stepLabel" class="label">현재 STEP</div><div id="step" class="value">—</div><div id="stepHint" class="hint">—</div></div>
     <div class="stat"><div class="label">LOSS / LOSS AVG</div><div id="loss" class="value cyan">—</div><div id="ema" class="hint">LOSS AVG —</div></div>
-    <div class="stat"><div class="label">LEARNING RATE</div><div id="lr" class="value">—</div><div id="grad" class="hint">AdamW</div></div>
-    <div class="stat globalCard"><div class="label">현재 GLOBAL BATCH</div><div id="globalBatch" class="value amber">—</div><div class="batchMeter"><i id="globalBatchBar"></i></div><div id="globalBatchHint" class="hint">단일 GPU</div></div>
-    <div class="stat"><div id="sampleLabel" class="label">최근 생성 STEP</div><div id="sampleStep" class="value">—</div><div id="sampleHint" class="hint">Euler · 36장</div></div>
+    <div class="stat"><div class="label">DATA MSE</div><div id="dataMse" class="value cyan">—</div><div class="hint">clean latent 예측 오차</div></div>
+    <div class="stat"><div class="label">KL RATE</div><div id="klRate" class="value amber">—</div><div id="weightedKl" class="hint">β × KL —</div></div>
+    <div class="stat"><div class="label">β</div><div id="klBeta" class="value lime">0.0001</div><div id="betaHint" class="hint">초기 설정 · 0.0001 → 1</div></div>
+  </section>
+  <section class="batchAndKl">
+  <section class="panel"><div class="panelHead"><div><div class="label">IMAGENET</div><div class="panelTitle">Live training batch</div></div><span id="liveStep" class="small mono"></span></div><div id="liveBatch"></div></section>
+    <article class="panel"><div class="panelHead"><div><div class="label">KL RATE BY LEVEL</div><div class="panelTitle">e4 · e8 · e16</div></div><span class="small mono">nats / data dim</span></div>
+      <div id="klLegend" class="klLegend"></div><div id="klPlot"></div>
+    </article>
   </section>
   <section class="checkpointStrip">
     <div class="checkpointBox"><div class="label">마지막 체크포인트 저장</div><div id="lastCheckpointLarge" class="checkpointTime">확인 중</div><div id="lastCheckpointDetail" class="checkpointDetail">—</div></div>
@@ -64,16 +80,15 @@ html{color-scheme:dark}body:before{content:"";position:fixed;inset:0;pointer-eve
   <section class="grid">
     <article class="panel"><div class="panelHead"><div><div class="label">OPTIMIZATION TRACE</div><div class="panelTitle">Loss history</div></div><div id="chartRange" class="small mono">대기 중</div></div><canvas id="chart"></canvas></article>
     <aside class="panel"><div class="panelHead"><div><div class="label">HARDWARE</div><div class="panelTitle">CPU + GPU telemetry</div></div><div class="small mono">3초 갱신</div></div><div id="cpuList" class="cpuList"></div><div id="gpuList" class="gpuList"></div><div class="method">
-      <div class="methodRow"><b>DATA MSE</b><span id="conditionText">설정 불러오는 중</span></div>
-      <div class="methodRow"><b id="conditionModeLabel">KL RATE · β</b><span id="conditionModeText">설정 불러오는 중</span></div>
-      <div class="methodRow"><b>KL e4 / e8 / e16</b><span id="objectiveText">—</span></div>
+      <div class="methodRow"><b>Learning rate</b><span id="lr">—</span></div>
+      <div class="methodRow"><b>Global batch</b><span id="globalBatch">—</span></div>
+      <div class="methodRow"><b>최근 생성 STEP</b><span id="sampleStep">—</span></div>
       <div class="methodRow"><b>LAST SAVE</b><span id="lastCheckpoint">확인 중</span></div>
       <div class="methodRow"><b>NEXT SAVE</b><span id="nextCheckpoint">확인 중</span></div>
     </div></aside>
   </section>
   <section class="panel gpuHistoryPanel"><div class="panelHead"><div><div class="label">LIVE TELEMETRY · LAST 10 MINUTES</div><div class="panelTitle">GPU 이용률 <strong>최근 10분</strong></div></div><div id="gpuHistoryRange" class="small mono">기록 대기 중</div></div><canvas id="gpuHistoryChart" aria-label="최근 10분간 GPU별 이용률 그래프"></canvas><div id="gpuHistoryNote" class="gpuHistoryNote">최근 10분만 표시합니다.</div></section>
   <section class="panel samplesPanel"><div class="panelHead"><div><div id="resultTimelineLabel" class="label">EULER · SAMPLE HISTORY</div><div class="panelTitle">Generated <strong>samples</strong></div><div id="sampleMeta" class="small mono">NFE 1 · 3 · 5 / T 0.0 · 0.3 · 0.6 / 각 4장</div></div><div id="sampleTools" class="sampleTools"></div></div><div id="sampleGrid" class="sampleGrid conditions"><div class="empty">생성 결과를 불러오는 중입니다.</div></div></section>
-  <section class="panel samplesPanel"><div class="panelHead"><div><div class="label">IMAGENET</div><div class="panelTitle">Live training batch</div></div></div><div id="liveBatch"></div></section>
   <div id="footer" class="footer">—</div>
 </main>
 <div id="lightbox" class="lightbox" aria-hidden="true"><button id="lightboxClose" class="lightboxButton lightboxClose" aria-label="닫기">×</button><button id="lightboxPrev" class="lightboxButton lightboxPrev" aria-label="이전 이미지">‹</button><img id="lightboxImage" alt="확대 이미지"><button id="lightboxNext" class="lightboxButton lightboxNext" aria-label="다음 이미지">›</button><div id="lightboxCaption" class="lightboxCaption"></div></div>

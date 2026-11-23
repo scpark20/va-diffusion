@@ -388,6 +388,37 @@ function chooseStep(step) {
   }
   set("#sampleMeta", "STEP " + fmt(step) + (step === 0 ? " · 학습 전 기준선" : "") + " · Euler · CFG 1.5 · 9조건 × 4장");
 }
+const klLevels = [["kl4", "e4", "#48e7ff"], ["kl8", "e8", "#ffbd5b"], ["kl16", "e16", "#ff80bb"]];
+function drawLevelRates(history) {
+  const rows = history.filter(p => Number.isFinite(p.step) && klLevels.every(([key]) => Number.isFinite(p[key])));
+  const legend = $("#klLegend");
+  legend.replaceChildren();
+  for (const [key, label, color] of klLevels) {
+    const item = make("span"), line = make("i");
+    line.style.background = color;
+    item.append(line, make("span", "", label + " " + fixed(rows.at(-1)?.[key], 5)));
+    legend.append(item);
+  }
+  const target = $("#klPlot");
+  if (!rows.length) { empty(target, "첫 KL 측정값을 기다리고 있습니다."); return; }
+  const width = 620, height = 184, left = 65, right = width - 18, top = 14, bottom = height - 29;
+  const peak = Math.max(1e-8, ...rows.map(row => Math.max(...klLevels.map(([key]) => row[key])))) * 1.05;
+  const first = rows[0].step, last = rows.at(-1).step;
+  const x = step => left + (right-left) * (step-first) / Math.max(1,last-first);
+  const y = value => bottom - (bottom-top) * value / peak;
+  let svg = '<svg viewBox="0 0 620 184" role="img" aria-label="Optimizer step별 e4, e8, e16 KL rate">';
+  for (let i=0; i<=3; i++) {
+    const v = peak * i / 3, py = y(v);
+    svg += '<path d="M'+left+' '+py+'H'+right+'" stroke="#283a50"/><text x="'+(left-7)+'" y="'+(py+4)+'" text-anchor="end">'+v.toPrecision(2)+'</text>';
+  }
+  for (const [key,,color] of klLevels) {
+    const path = rows.map((row,i) => (i ? 'L':'M') + x(row.step).toFixed(2)+' '+y(row[key]).toFixed(2)).join(' ');
+    svg += '<path data-kl="'+key+'" d="'+path+'" fill="none" stroke="'+color+'" stroke-width="2"/><circle cx="'+x(last)+'" cy="'+y(rows.at(-1)[key])+'" r="2.5" fill="'+color+'"/>';
+  }
+  svg += '<text x="'+left+'" y="179">STEP '+first+'</text>';
+  if (last !== first) svg += '<text x="'+right+'" y="179" text-anchor="end">STEP '+last+'</text>';
+  target.innerHTML = svg + '</svg>';
+}
 function render(d) {
   const s = d.status;
   const m = s.latest || {};
@@ -403,13 +434,14 @@ function render(d) {
   set("#loss", fixed(m.loss, 5));
   set("#ema", "LOSS AVG " + fixed(currentHistory.at(-1)?.ema, 5));
   set("#lr", s.lr == null ? "—" : String(s.lr));
-  set("#grad", "AdamW · addon only");
   set("#globalBatch", fmt(s.batch_size));
-  set("#globalBatchHint", s.batch_size ? "GPU 1 · " + fmt(s.batch_size) + "장 / update" : "학습 대기");
-  $("#globalBatchBar").style.width = s.batch_size ? "100%" : "0";
-  set("#conditionText", fixed(m.data_mse, 6));
-  set("#conditionModeText", fixed(m.kl, 6) + " · β " + fixed(m.beta, 6));
-  set("#objectiveText", [m.kl4, m.kl8, m.kl16].map(v => fixed(v, 6)).join(" / "));
+  set("#dataMse", fixed(m.data_mse, 6));
+  set("#klRate", fixed(m.kl, 6));
+  set("#weightedKl", "β × KL " + fixed(Number.isFinite(m.beta) && Number.isFinite(m.kl) ? m.beta * m.kl : null, 6));
+  set("#klBeta", m.beta == null ? "0.0001" : fixed(m.beta, 6));
+  set("#betaHint", (m.beta == null ? "초기 설정" : "STEP " + fmt(m.step) + " 적용값") + " · s=5,042부터 1");
+  set("#liveStep", d.live.length ? "STEP " + fmt(d.live_step) + " · " + fmt(d.live.length) + "장" : "첫 배치 대기");
+  drawLevelRates(currentHistory);
   set("#chartRange", currentHistory.length ? "STEP " + fmt(currentHistory[0].step) + " – " + fmt(currentHistory.at(-1).step) : "첫 loss 대기");
   drawChart(currentHistory);
   renderHardware(d.cpu, d.gpus);
@@ -421,7 +453,6 @@ function render(d) {
   sampleSteps = d.steps;
   const newest = sampleSteps.at(-1);
   set("#sampleStep", fmt(newest));
-  set("#sampleHint", newest == null ? "샘플 대기" : "Euler · 36장");
   if (changed && newest != null) {
     if (chosenStep == null || chosenStep === previousNewest) chooseStep(newest);
     else renderStepTools();
