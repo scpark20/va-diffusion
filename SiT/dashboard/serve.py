@@ -3,6 +3,7 @@ import argparse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -37,8 +38,36 @@ def telemetry():
                  memory_total_mib=float(total),temperature_c=float(temp),power_w=float(power))]
 
 
+def progress_check(run, active, pid, previous):
+    status = read_json(run / "status.json", {})
+    phase = actual_phase(status, active, pid)
+    step = status.get("step", 0)
+    issues = []
+    if phase == "training":
+        if previous is not None and previous == (pid, step):
+            issues.append("step_stalled")
+        m = status.get("latest", {})
+        if not all(math.isfinite(m.get(k, math.nan)) for k in ("step", "e4", "e8", "e16", "kl", "loss", "beta", "data_mse")):
+            issues.append("missing_or_nonfinite_metric")
+        else:
+            if not math.isclose(m["kl"], m["e4"] + m["e8"] + m["e16"], rel_tol=2e-6, abs_tol=1e-7):
+                issues.append("kl_sum")
+            if m["beta"] != beta(m["step"] - 1):
+                issues.append("beta_schedule")
+            if not math.isclose(m["loss"], m["data_mse"] + m["beta"] * m["kl"], rel_tol=2e-6, abs_tol=1e-7):
+                issues.append("loss_sum")
+        due = status.get("next_checkpoint_at")
+        if due is not None and time.time() > due + 60:
+            issues.append("checkpoint_overdue")
+    saved = status.get("last_checkpoint_step")
+    if saved is not None and phase == "training" and not (run / "samples" / str(saved) / "manifest.json").is_file():
+        issues.append("saved_samples_missing")
+    return {"phase": phase, "step": step, "saved": saved, "issues": issues}
+
+
 class State:
-    def __init__(self):
+    def __init__(self, run):
+        self.run = run
         self.lock = threading.Lock()
         self.samples = deque(maxlen=200)
         self.cpu, self.gpus, self.active, self.pid = {}, [], "unknown", 0
@@ -46,6 +75,8 @@ class State:
 
     def poll(self):
         previous = None
+        previous_progress = None
+        next_check = time.monotonic()
         while True:
             tick = list(map(int,Path("/proc/stat").read_text().splitlines()[0].split()[1:9]))
             total, idle = sum(tick), tick[3]+tick[4]
@@ -67,6 +98,11 @@ class State:
                 self.active,self.pid = fields.get("ActiveState","unknown"), int(fields.get("MainPID",0))
                 self.samples.append({"timestamp":time.time(),"gap":not bool(gpus),
                                      "utilization":{"1":gpus[0]["utilization_percent"]} if gpus else {}})
+            if time.monotonic() >= next_check:
+                check = progress_check(self.run, self.active, self.pid, previous_progress)
+                print(json.dumps({"event": "progress_check", **check}), flush=True)
+                previous_progress = (self.pid, check["step"]) if check["phase"] == "training" else None
+                next_check += 300
             time.sleep(3)
 
     def snapshot(self, run):
@@ -99,7 +135,7 @@ def serve(run, prx_html, bind):
     page, prx_js = build(prx_html, (HERE/"index.html").read_text())
     static = {"/":(page,"text/html; charset=utf-8"), "/prx.js":(prx_js,"application/javascript"),
               "/view.js":((HERE/"view.js").read_bytes(),"application/javascript")}
-    state = State()
+    state = State(run)
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path = urlsplit(self.path).path
