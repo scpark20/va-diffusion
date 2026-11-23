@@ -6,6 +6,7 @@ from io import BytesIO
 import json
 import os
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ from safetensors.torch import load_file
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from torchvision import transforms
+from torchvision.utils import save_image
 from PIL import Image
 
 from models import SiT_models
@@ -116,6 +118,30 @@ def reduce_mean(value: torch.Tensor, world_size: int) -> torch.Tensor:
     return value
 
 
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def write_json(path: Path, payload) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, default=str))
+    temporary.replace(path)
+
+
+@torch.no_grad()
+def save_live_batch(images: torch.Tensor, output_dir: Path, count: int = 4) -> None:
+    for index, image in enumerate(images[:count]):
+        save_image(
+            image,
+            output_dir / f"live_{index:02d}.png",
+            normalize=True,
+            value_range=(-1, 1),
+        )
+
+
 def main(args):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required")
@@ -136,6 +162,8 @@ def main(args):
 
     if rank == 0:
         args.output_dir.mkdir(parents=True, exist_ok=True)
+        (args.output_dir / "live_batch").mkdir(exist_ok=True)
+        (args.output_dir / "samples").mkdir(exist_ok=True)
     if distributed:
         dist.barrier()
 
@@ -184,8 +212,9 @@ def main(args):
         global_step = int(state["global_step"])
 
     total_steps = args.epochs * len(loader)
+    history = read_json(args.output_dir / "history.json", {"loss": []}) if args.resume else {"loss": []}
     if rank == 0:
-        print(json.dumps({
+        run_info = {
             "model": "VA-Diffusion/SiT-S/2",
             "parquet_shards": len(data_files),
             "dataset_size": len(dataset),
@@ -194,9 +223,19 @@ def main(args):
             "global_batch": args.batch_size * world_size,
             "addon_parameters": sum(parameter.numel() for parameter in addon_parameters),
             "frozen_parameters": sum(parameter.numel() for parameter in module.base.parameters()),
-        }))
+        }
+        print(json.dumps(run_info))
+        write_json(args.output_dir / "status.json", {
+            **run_info,
+            "state": "prepared",
+            "epoch": start_epoch,
+            "epochs": args.epochs,
+            "step": global_step,
+        })
+        write_json(args.output_dir / "history.json", history)
 
     model.train()
+    last_log_time = time.monotonic()
     for epoch in range(start_epoch, args.epochs):
         dataset.set_epoch(epoch)
 
@@ -240,7 +279,7 @@ def main(args):
                 ])
                 metrics = reduce_mean(metrics, world_size).cpu().tolist()
                 if rank == 0:
-                    print(json.dumps({
+                    point = {
                         "epoch": epoch,
                         "step": global_step,
                         "loss": metrics[0],
@@ -250,7 +289,21 @@ def main(args):
                         "kl_e8": metrics[4],
                         "kl_e16": metrics[5],
                         "beta": beta,
-                    }))
+                        "steps_per_second": args.log_every / max(time.monotonic() - last_log_time, 1e-9),
+                    }
+                    last_log_time = time.monotonic()
+                    print(json.dumps(point))
+                    history["loss"].append(point)
+                    write_json(args.output_dir / "history.json", history)
+                    write_json(args.output_dir / "status.json", {
+                        **run_info,
+                        "state": "training",
+                        "epoch": epoch,
+                        "epochs": args.epochs,
+                        "step": global_step,
+                        "latest": point,
+                    })
+                    save_live_batch(images, args.output_dir / "live_batch")
 
         if rank == 0 and ((epoch + 1) % args.save_every_epochs == 0 or epoch + 1 == args.epochs):
             torch.save({
@@ -263,6 +316,15 @@ def main(args):
         if distributed:
             dist.barrier()
 
+    if rank == 0:
+        write_json(args.output_dir / "status.json", {
+            **run_info,
+            "state": "complete",
+            "epoch": args.epochs,
+            "epochs": args.epochs,
+            "step": global_step,
+            "latest": history["loss"][-1] if history["loss"] else {},
+        })
     if distributed:
         dist.destroy_process_group()
 
