@@ -73,12 +73,13 @@ loss = data_mse + beta * kl_rate
 학습은 epoch 상한 없이 계속되며 SIGINT 또는 SIGTERM을 받으면 현재 step을 마친 뒤
 checkpoint와 샘플을 저장하고 정상 중지한다.
 
-대시보드 생성 샘플은 Euler, CFG 1.5, NFE `1·3·5·10`, prior temperature
+대시보드 생성 샘플은 Euler, CFG 1.5, NFE `1·3·5`, prior temperature
 `0.0·0.3·0.6`, 조합당 4장을 사용한다. Temperature는
 `z = mu_p + temperature * sigma_p * epsilon`에만 적용한다.
 고정 class label은 `207·360·387·974`이며 모든 조합에서 초기 noise와 prior epsilon을 공유한다.
-Addon·optimizer·epoch/batch 위치·CPU/CUDA RNG는 30분마다 `latest.pt`에 저장하고,
-각 checkpoint 직후 같은 STEP의 48장 Euler 샘플을 생성한다.
+첫 업데이트 전 STEP 0과 이후 30분마다 Euler 샘플 36장을 생성한다.
+`latest.pt`의 모델 텐서는 FP32 addon 가중치 104,364,288개다.
+학습 위치와 난수 상태도 기록한다. 재개 시 AdamW 모멘트는 새로 시작한다.
 
 검증 진입점 `verify_va_diffusion.py`는 실제 ImageNet 배치로 초기 출력의 일치,
-학습 재개 후 다음 loss와 모든 addon 파라미터의 일치, 48개 PNG의 수와 해상도를 검사한다.
+frozen SiT 파라미터 불변, 빈 AdamW로 재개한 다음 업데이트의 재현성, 36개 PNG의 수와 해상도를 검사한다.

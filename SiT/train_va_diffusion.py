@@ -95,25 +95,25 @@ def atomic_json(path, data):
     tmp.replace(path)
 
 
-def save_checkpoint(path, model, optimizer, position, settings):
+def save_checkpoint(path, model, position, settings):
     tmp = path.with_suffix(".pt.tmp")
     try:
-        torch.save({"format": 2, "addon": model.addon.state_dict(), "optimizer": optimizer.state_dict(),
-                    **position, "settings": settings, "cpu_rng": torch.get_rng_state(),
-                    "gpu_rng": torch.cuda.get_rng_state(next(model.parameters()).device)}, tmp)
+        device = next(model.parameters()).device
+        torch.save({"format": 3, "addon": model.addon.state_dict(), **position, "settings": settings,
+                    "cpu_rng": bytes(torch.get_rng_state().tolist()),
+                    "gpu_rng": bytes(torch.cuda.get_rng_state(device).tolist())}, tmp)
         tmp.replace(path)
     finally:
         tmp.unlink(missing_ok=True)
 
 
-def restore_checkpoint(path, model, optimizer, settings):
+def restore_checkpoint(path, model, settings):
     state = torch.load(path, map_location="cpu", weights_only=True)
-    if state.get("format") != 2 or state["settings"] != settings:
+    if state.get("format") != 3 or state["settings"] != settings:
         raise ValueError("checkpoint format or training settings differ")
     model.load_addon_state_dict(state["addon"])
-    optimizer.load_state_dict(state["optimizer"])
-    torch.set_rng_state(state["cpu_rng"])
-    torch.cuda.set_rng_state(state["gpu_rng"], next(model.parameters()).device)
+    torch.set_rng_state(torch.tensor(list(state["cpu_rng"]), dtype=torch.uint8))
+    torch.cuda.set_rng_state(torch.tensor(list(state["gpu_rng"]), dtype=torch.uint8), next(model.parameters()).device)
     return {k: state[k] for k in ("epoch", "batch_in_epoch", "global_step")}
 
 
@@ -140,7 +140,7 @@ def train(args):
     pos = {"epoch": 0, "batch_in_epoch": 0, "global_step": 0}
     history = {"loss": []}
     if args.resume:
-        pos = restore_checkpoint(latest, model, optimizer, settings)
+        pos = restore_checkpoint(latest, model, settings)
         if (out / "history.json").is_file():
             history["loss"] = [p for p in json.loads((out / "history.json").read_text())["loss"]
                                if p["step"] <= pos["global_step"]]
@@ -151,12 +151,20 @@ def train(args):
             "addon_parameters": sum(p.numel() for p in model.addon.parameters()),
             "frozen_parameters": sum(p.numel() for p in model.base.parameters())}
 
+    last_saved = pos["global_step"] if args.resume else None
+    checkpoint_time = time.monotonic() + 1800
+
     def status(state, **extra):
         atomic_json(out / "status.json", {**info, **pos, "step": pos["global_step"], "state": state,
+                                         "last_checkpoint_step": last_saved,
+                                         "next_checkpoint_at": time.time() + checkpoint_time - time.monotonic()
+                                         if state in ("training", "starting", "sampling") else None,
                                          "latest": history["loss"][-1] if history["loss"] else {}, **extra})
 
     def checkpoint():
-        save_checkpoint(latest, model, optimizer, pos, settings)
+        nonlocal last_saved
+        save_checkpoint(latest, model, pos, settings)
+        last_saved = pos["global_step"]
         status("sampling")
         generate_sample_set(model, vae, out / "samples", pos["global_step"], seed=args.seed)
 
@@ -168,9 +176,10 @@ def train(args):
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     status("starting")
-    checkpoint_time = time.monotonic() + 30 * 60
-    last_saved = None
     try:
+        if pos["global_step"] == 0:
+            status("sampling")
+            generate_sample_set(model, vae, out / "samples", 0, seed=args.seed)
         while not stopped:
             dataset.epoch = pos["epoch"]
             batches = itertools.islice(loader, pos["batch_in_epoch"], None)
@@ -196,8 +205,7 @@ def train(args):
                 if time.monotonic() >= checkpoint_time:
                     checkpoint_time = time.monotonic() + 1800
                     checkpoint()
-                    last_saved = step
-                    status("training", last_checkpoint_step=step)
+                    status("training")
             if not stopped:
                 pos.update(epoch=pos["epoch"] + 1, batch_in_epoch=0)
         if pos["global_step"] and last_saved != pos["global_step"]:

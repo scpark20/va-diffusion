@@ -40,7 +40,13 @@ def verify(device_index):
     vae = AutoencoderKL.from_pretrained(str(WEIGHTS / "vae"), local_files_only=True).eval().requires_grad_(False).to(device)
     optimizer = torch.optim.AdamW(model.addon.parameters(), lr=1e-4, weight_decay=0)
     model.train()
+    assert all(not p.requires_grad for p in model.base.parameters())
+    assert all(p.requires_grad for p in model.addon.parameters())
+    assert {id(p) for g in optimizer.param_groups for p in g["params"]} == {id(p) for p in model.addon.parameters()}
+    frozen = {k: p.cpu().clone() for k, p in model.base.state_dict().items()}
     update(model, optimizer, vae, *batch1, 0)
+    for k, p in model.base.state_dict().items():
+        torch.testing.assert_close(p.cpu(), frozen[k], rtol=0, atol=0)
     assert all(p.grad is None for p in model.base.parameters())
     for k in ("e4", "e8", "e16"):
         assert torch.count_nonzero(model.addon[k].project.weight)
@@ -48,13 +54,20 @@ def verify(device_index):
     with TemporaryDirectory(prefix="va-diffusion-check-") as directory:
         tmp = Path(directory)
         path = tmp / "latest.pt"
-        save_checkpoint(path, model, optimizer, position, {})
+        save_checkpoint(path, model, position, {})
+        on_disk = torch.load(path, weights_only=True, map_location="cpu", mmap=True)
+        assert set(on_disk) == {"format", "addon", "settings", "epoch", "batch_in_epoch", "global_step", "cpu_rng", "gpu_rng"}
+        assert set(on_disk["addon"]) == set(model.addon.state_dict())
+        assert path.stat().st_size < sum(v.nbytes for v in on_disk["addon"].values()) + 1024**2
+        del on_disk
+        # The reference follows the same weights-only restart with fresh AdamW moments.
+        optimizer = torch.optim.AdamW(model.addon.parameters(), lr=1e-4, weight_decay=0)
         expected = update(model, optimizer, vae, *batch2, 1)
         reference = {k: v.detach().cpu() for k, v in model.addon.state_dict().items()}
         del model, optimizer
         model = make_model(device).train()
         optimizer = torch.optim.AdamW(model.addon.parameters(), lr=1e-4, weight_decay=0)
-        assert restore_checkpoint(path, model, optimizer, {}) == position
+        assert restore_checkpoint(path, model, {}) == position
         repeated = iter(loader)
         next(repeated)
         for seen, known in zip(next(repeated), batch2):
@@ -67,12 +80,13 @@ def verify(device_index):
         cpu_rng, gpu_rng = torch.get_rng_state(), torch.cuda.get_rng_state(device)
         _, names = generate_sample_set(model, vae, tmp / "samples", 2)
         assert model.training and torch.equal(cpu_rng, torch.get_rng_state()) and torch.equal(gpu_rng, torch.cuda.get_rng_state(device))
-        assert len(set(names)) == 48
+        assert len(set(names)) == 36
         for name in names:
             with Image.open(tmp / "samples" / name) as im:
                 assert im.format == "PNG" and im.size == (256, 256)
                 im.verify()
-        print(json.dumps({"base_output_equal": True, "resume_equal": True, "verified_samples": len(names),
+        print(json.dumps({"base_output_equal": True, "base_weights_unchanged": True,
+                          "fresh_adam_resume_equal": True, "verified_samples": len(names),
                           "addon_parameters": sum(p.numel() for p in model.addon.parameters()),
                           "checkpoint_bytes": path.stat().st_size, "data_mse": actual["data_mse"]}), flush=True)
 

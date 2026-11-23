@@ -15,6 +15,7 @@ from models_va_diffusion import LATENT_DIM, TOKEN_GRID, VADiffusionSiT
 
 
 LATENT_SCALE = 0.18215
+NFES = (1, 3, 5)
 
 
 def sha256(path: Path) -> str:
@@ -30,8 +31,8 @@ def load_model(base_path: Path, addon_path: Path, device: torch.device):
     base.load_state_dict(load_file(str(base_path), device="cpu"), strict=True)
     model = VADiffusionSiT(base)
     checkpoint = torch.load(addon_path, map_location="cpu", weights_only=True)
-    if checkpoint.get("format") != 2:
-        raise ValueError("expected a VA-Diffusion format 2 checkpoint")
+    if checkpoint.get("format") != 3:
+        raise ValueError("expected an addon-only format 3 checkpoint")
     model.load_addon_state_dict(checkpoint["addon"])
     return model.eval().requires_grad_(False).to(device), checkpoint
 
@@ -91,7 +92,7 @@ def generate_sample_set(
     global_step,
     labels=(207, 360, 387, 974),
     cfg_scale=1.5,
-    nfes=(1, 3, 5, 10),
+    nfes=NFES,
     temperatures=(0.0, 0.3, 0.6),
     seed=0,
     bf16=True,
@@ -214,7 +215,7 @@ def parse_args():
     parser.add_argument("--gpu", type=int, default=1)
     parser.add_argument("--labels", type=int, nargs=4, default=[207, 360, 387, 974])
     parser.add_argument("--cfg-scale", type=float, default=1.5)
-    parser.add_argument("--nfes", type=int, nargs="+", default=[1, 3, 5, 10])
+    parser.add_argument("--nfes", type=int, choices=NFES, nargs="+", default=NFES)
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.0, 0.3, 0.6])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fp32", action="store_false", dest="bf16")
