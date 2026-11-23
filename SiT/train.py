@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import subprocess
 from tempfile import TemporaryDirectory
 import time
 
@@ -24,8 +25,7 @@ from experiment import BATCH, INTERVAL, LR, RUN, beta, read_json, write_json
 from model import BASE_FILE, LEVELS, VASiT, WEIGHTS
 from samples import SCALE, complete, publish
 
-DATA = Path("/home/scpark/data/imagenet-1k-adm-crop-256/data")
-GPU = "GPU-df10b232-92c0-d60e-e2e1-9db16f3032bc"
+DATA = Path(os.environ["VA_IMAGENET_TRAIN"])
 
 
 class TrainingImages(IterableDataset):
@@ -261,8 +261,10 @@ if __name__ == "__main__":
     mode.add_argument("--verify", action="store_true")
     mode.add_argument("--resume", action="store_true")
     args = p.parse_args()
-    if os.environ.get("CUDA_VISIBLE_DEVICES") != GPU or torch.cuda.device_count() != 1:
-        raise RuntimeError("this experiment requires only server 67 physical GPU 1")
+    gpu_uuid = subprocess.check_output(["nvidia-smi","-i","1","--query-gpu=uuid","--format=csv,noheader"],
+                                       text=True).strip()
+    if os.environ.get("CUDA_VISIBLE_DEVICES") != gpu_uuid or torch.cuda.device_count() != 1:
+        raise RuntimeError("expose only the UUID of physical GPU 1")
     torch.cuda.set_device(0)
     torch.manual_seed(0)
     files = sorted(DATA.glob("train-*.parquet"))

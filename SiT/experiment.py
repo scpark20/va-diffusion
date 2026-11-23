@@ -9,7 +9,7 @@ BATCH = 128
 LR = 0.0001
 INTERVAL = 1800
 UNIT = "va-diffusion-sit-s2-train.service"
-RUN = Path("/home/scpark/va-diffusion/runs/imagenet_sit_s2_100m")
+RUN = Path(__file__).resolve().parents[1] / "runs" / "imagenet_sit_s2_100m"
 
 
 def beta(completed):

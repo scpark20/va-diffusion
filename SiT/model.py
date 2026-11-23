@@ -1,4 +1,5 @@
 """A frozen SiT-S/2 with three spatial, conditionally Gaussian latent groups."""
+import os
 from pathlib import Path
 
 import torch
@@ -8,7 +9,7 @@ from torch.nn import functional as F
 
 from models import SiT_S_2
 
-WEIGHTS = Path("/data/RBF-Solver/weights/SiT-diffusers/SiT-S-2-256")
+WEIGHTS = Path(os.environ["VA_SIT_WEIGHTS"])
 BASE_FILE = WEIGHTS / "transformer/diffusion_pytorch_model.safetensors"
 LEVELS = ("e4", "e8", "e16")
 AT_BLOCK = {4: "e4", 8: "e8", 12: "e16"}

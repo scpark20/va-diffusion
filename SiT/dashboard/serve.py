@@ -95,7 +95,7 @@ class State:
                 "live":read_json(run/"live"/"manifest.json",{}),"server_time":time.time()}
 
 
-def serve(run, prx_html):
+def serve(run, prx_html, bind):
     page, prx_js = build(prx_html, (HERE/"index.html").read_text())
     static = {"/":(page,"text/html; charset=utf-8"), "/prx.js":(prx_js,"application/javascript"),
               "/view.js":((HERE/"view.js").read_bytes(),"application/javascript")}
@@ -128,12 +128,13 @@ def serve(run, prx_html):
 
         def log_message(self,*args):
             pass
-    ThreadingHTTPServer(("192.168.0.67",8805),Handler).serve_forever()
+    ThreadingHTTPServer((bind,8805),Handler).serve_forever()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--prx-html",type=Path,required=True)
     p.add_argument("--run",type=Path,default=RUN)
+    p.add_argument("--bind", required=True, help="LAN address of the dashboard host")
     args = p.parse_args()
-    serve(args.run,args.prx_html)
+    serve(args.run,args.prx_html,args.bind)
