@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 LIVE_PATTERN = re.compile(r"live_[0-9]{2}\.png\Z")
 SAMPLE_PATTERN = re.compile(
-    r"epoch_[0-9]{4}_nfe_(1|3|5|10)_temp_(0p0|0p3|0p6)_[0-9]{2}\.png\Z"
+    r"step_[0-9]{8}_nfe_(1|3|5|10)_temp_(0p0|0p3|0p6)_[0-9]{2}\.png\Z"
 )
 
 
@@ -25,7 +25,7 @@ def read_json(path, default):
         return default
 
 
-def gpu_status():
+def gpu_status(gpu_index):
     try:
         result = subprocess.run(
             [
@@ -47,6 +47,7 @@ def gpu_status():
             }
             for line in result.stdout.splitlines()
             if len(parts := [part.strip() for part in line.split(",")]) == 4
+            and int(parts[0]) == gpu_index
         ]
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
@@ -61,14 +62,14 @@ def snapshot(run_dir):
         if LIVE_PATTERN.fullmatch(path.name)
     ]
     samples = []
-    for path in sorted((run_dir / "samples").glob("epoch_*.png")):
+    for path in sorted((run_dir / "samples").glob("step_*.png")):
         match = SAMPLE_PATTERN.fullmatch(path.name)
         if not match:
             continue
         parts = path.stem.split("_")
         samples.append({
             "url": f"/samples/{path.name}?v={path.stat().st_mtime_ns}",
-            "label": f"Epoch {int(parts[1])} · #{int(parts[-1]) + 1}",
+            "label": f"Step {int(parts[1]):,} · #{int(parts[-1]) + 1}",
             "nfe": int(match.group(1)),
             "temperature": float(match.group(2).replace("p", ".")),
         })
@@ -77,7 +78,7 @@ def snapshot(run_dir):
         "history": history,
         "live_batch": live_batch,
         "samples": samples,
-        "gpus": gpu_status(),
+        "gpus": gpu_status(int(status.get("gpu_index", 1))),
         "server_time": time.time(),
     }
 

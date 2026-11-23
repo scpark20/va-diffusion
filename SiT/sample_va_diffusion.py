@@ -11,7 +11,7 @@ from safetensors.torch import load_file
 from torchvision.utils import save_image
 
 from models import SiT_models
-from models_va_diffusion import VADiffusionSiT
+from models_va_diffusion import LATENT_DIM, TOKEN_GRID, VADiffusionSiT
 
 
 LATENT_SCALE = 0.18215
@@ -28,8 +28,8 @@ def sha256(path: Path) -> str:
 def load_model(base_path: Path, addon_path: Path, device: torch.device):
     base = SiT_models["SiT-S/2"](input_size=32)
     base.load_state_dict(load_file(str(base_path), device="cpu"), strict=True)
-    model = VADiffusionSiT(base, latent_dim=16)
-    checkpoint = torch.load(addon_path, map_location="cpu")
+    model = VADiffusionSiT(base)
+    checkpoint = torch.load(addon_path, map_location="cpu", weights_only=True)
     model.load_addon_state_dict(checkpoint["addon"])
     return model.eval().requires_grad_(False).to(device), checkpoint
 
@@ -81,70 +81,114 @@ def euler_sample(
     return x
 
 
+@torch.inference_mode()
+def generate_sample_set(
+    model,
+    vae,
+    output_dir,
+    global_step,
+    labels=(207, 360, 387, 974),
+    cfg_scale=1.5,
+    nfes=(1, 3, 5, 10),
+    temperatures=(0.0, 0.3, 0.6),
+    seed=0,
+    bf16=True,
+):
+    if len(labels) != 4:
+        raise ValueError("exactly four class labels are required")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    device = next(model.parameters()).device
+    generator = torch.Generator(device=device).manual_seed(seed)
+    labels_tensor = torch.tensor(labels, device=device, dtype=torch.long)
+    initial_noise = torch.randn(4, 4, 32, 32, device=device, generator=generator)
+    prior_eps = {
+        level: torch.randn(
+            4,
+            LATENT_DIM,
+            TOKEN_GRID,
+            TOKEN_GRID,
+            device=device,
+            generator=generator,
+        )
+        for level in ("e4", "e8", "e16")
+    }
+    files = []
+    was_training = model.training
+    model.eval()
+
+    for temperature in temperatures:
+        for nfe in nfes:
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
+                latent = euler_sample(
+                    model,
+                    initial_noise,
+                    labels_tensor,
+                    prior_eps,
+                    nfe,
+                    temperature,
+                    cfg_scale,
+                )
+                images = vae.decode(latent / LATENT_SCALE).sample
+            for index, image in enumerate(images):
+                name = (
+                    f"step_{global_step:08d}_nfe_{nfe}_"
+                    f"temp_{temperature_name(temperature)}_{index:02d}.png"
+                )
+                save_image(image, output_dir / name, normalize=True, value_range=(-1, 1))
+                files.append(name)
+
+    metadata = {
+        "model": "VA-Diffusion/SiT-S/2",
+        "sampler": "Euler",
+        "global_step": global_step,
+        "nfes": list(nfes),
+        "temperatures": list(temperatures),
+        "samples_per_setting": 4,
+        "cfg_scale": cfg_scale,
+        "labels": list(labels),
+        "seed": seed,
+        "temperature_definition": "z = mu_p + temperature * sigma_p * epsilon",
+        "shared_initial_noise": True,
+        "shared_prior_epsilon": True,
+        "files": files,
+    }
+    metadata_path = output_dir / f"step_{global_step:08d}_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+    model.train(was_training)
+    return metadata_path, files
+
+
 def main(args):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required")
-    if len(args.labels) != 4:
-        raise ValueError("exactly four class labels are required")
     for path in (args.base_ckpt, args.addon_ckpt):
         if not path.is_file():
             raise FileNotFoundError(path)
     if not args.vae.is_dir():
         raise FileNotFoundError(args.vae)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    device = torch.device("cuda")
-    torch.manual_seed(args.seed)
+    if args.gpu < 0 or args.gpu >= torch.cuda.device_count():
+        raise ValueError(f"GPU index {args.gpu} is unavailable")
+    torch.cuda.set_device(args.gpu)
+    device = torch.device("cuda", args.gpu)
     model, checkpoint = load_model(args.base_ckpt, args.addon_ckpt, device)
     vae = AutoencoderKL.from_pretrained(str(args.vae)).eval().requires_grad_(False).to(device)
-    labels = torch.tensor(args.labels, device=device, dtype=torch.long)
-    initial_noise = torch.randn(4, 4, 32, 32, device=device)
-    prior_eps = {
-        level: torch.randn(4, 256, 16, device=device)
-        for level in ("e4", "e8", "e16")
-    }
-    epoch = int(checkpoint.get("next_epoch", 0))
-    files = []
-
-    for temperature in args.temperatures:
-        for nfe in args.nfes:
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.bf16):
-                latent = euler_sample(
-                    model,
-                    initial_noise,
-                    labels,
-                    prior_eps,
-                    nfe,
-                    temperature,
-                    args.cfg_scale,
-                )
-                images = vae.decode(latent / LATENT_SCALE).sample
-            for index, image in enumerate(images):
-                name = (
-                    f"epoch_{epoch:04d}_nfe_{nfe}_"
-                    f"temp_{temperature_name(temperature)}_{index:02d}.png"
-                )
-                save_image(image, args.output_dir / name, normalize=True, value_range=(-1, 1))
-                files.append(name)
-
-    metadata = {
-        "model": "VA-Diffusion/SiT-S/2",
-        "sampler": "Euler",
-        "epoch": epoch,
-        "nfes": args.nfes,
-        "temperatures": args.temperatures,
-        "samples_per_setting": 4,
-        "cfg_scale": args.cfg_scale,
-        "labels": args.labels,
-        "seed": args.seed,
-        "temperature_definition": "z = mu_p + temperature * sigma_p * epsilon",
-        "shared_initial_noise": True,
-        "shared_prior_epsilon": True,
-        "base_checkpoint_sha256": sha256(args.base_ckpt),
-        "addon_checkpoint_sha256": sha256(args.addon_ckpt),
-        "files": files,
-    }
-    metadata_path = args.output_dir / f"epoch_{epoch:04d}_metadata.json"
+    global_step = int(checkpoint.get("global_step", 0))
+    metadata_path, files = generate_sample_set(
+        model,
+        vae,
+        args.output_dir,
+        global_step,
+        labels=args.labels,
+        cfg_scale=args.cfg_scale,
+        nfes=args.nfes,
+        temperatures=args.temperatures,
+        seed=args.seed,
+        bf16=args.bf16,
+    )
+    metadata = json.loads(metadata_path.read_text())
+    metadata["base_checkpoint_sha256"] = sha256(args.base_ckpt)
+    metadata["addon_checkpoint_sha256"] = sha256(args.addon_ckpt)
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
     print(json.dumps({"generated": len(files), "metadata": str(metadata_path)}))
 
@@ -163,7 +207,8 @@ def parse_args():
     )
     parser.add_argument("--addon-ckpt", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--labels", type=int, nargs=4, required=True)
+    parser.add_argument("--gpu", type=int, default=1)
+    parser.add_argument("--labels", type=int, nargs=4, default=[207, 360, 387, 974])
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     parser.add_argument("--nfes", type=int, nargs="+", default=[1, 3, 5, 10])
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.0, 0.3, 0.6])
